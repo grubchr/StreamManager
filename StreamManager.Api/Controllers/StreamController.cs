@@ -79,15 +79,76 @@ public class StreamController : ControllerBase
             
             if (response.IsSuccessStatusCode)
             {
-                var queryId = $"CSAS_{safeName}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-                stream.KsqlQueryId = queryId;
-                stream.OutputTopic = safeName.ToLowerInvariant();
-                stream.IsActive = true;
+                // Query ksqlDB to get the actual created query ID and topic
+                var showQueriesPayload = new { ksql = "SHOW QUERIES;" };
+                var showQueriesJson = JsonSerializer.Serialize(showQueriesPayload);
+                var showQueriesContent = new StringContent(showQueriesJson, Encoding.UTF8, "application/json");
                 
-                await _context.SaveChangesAsync();
+                var queriesResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", showQueriesContent);
                 
-                _logger.LogInformation("Successfully deployed stream {StreamId} with query ID {QueryId}", id, queryId);
-                return Ok(new { QueryId = queryId, OutputTopic = stream.OutputTopic });
+                if (queriesResponse.IsSuccessStatusCode)
+                {
+                    var queriesResult = await queriesResponse.Content.ReadAsStringAsync();
+                    
+                    // Parse the response to find the most recent query that matches our stream name
+                    string actualQueryId = null;
+                    string actualTopic = null;
+                    
+                    using var doc = JsonDocument.Parse(queriesResult);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
+                    {
+                        var firstResult = doc.RootElement[0];
+                        if (firstResult.TryGetProperty("queries", out var queries))
+                        {
+                            // Find the query with our stream name (look for most recent one)
+                            foreach (var query in queries.EnumerateArray())
+                            {
+                                if (query.TryGetProperty("queryString", out var queryString) &&
+                                    queryString.GetString()?.Contains($"CREATE STREAM {safeName}", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    if (query.TryGetProperty("id", out var idProp))
+                                        actualQueryId = idProp.GetString();
+                                    
+                                    if (query.TryGetProperty("sinks", out var sinks) && sinks.GetArrayLength() > 0)
+                                        actualTopic = sinks[0].GetString();
+                                    
+                                    // Take the last match (most recent)
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If we couldn't parse the response, fall back to safer defaults
+                    if (string.IsNullOrWhiteSpace(actualQueryId))
+                        actualQueryId = $"CSAS_{safeName.ToUpperInvariant()}_{Guid.NewGuid():N}";
+                    
+                    if (string.IsNullOrWhiteSpace(actualTopic))
+                        actualTopic = safeName.ToUpperInvariant();
+                    
+                    stream.KsqlQueryId = actualQueryId;
+                    stream.OutputTopic = actualTopic;
+                    stream.IsActive = true;
+                    
+                    await _context.SaveChangesAsync();
+                    
+                    _logger.LogInformation("Successfully deployed stream {StreamId} with query ID {QueryId} and topic {Topic}", id, actualQueryId, actualTopic);
+                    return Ok(new { QueryId = actualQueryId, OutputTopic = actualTopic });
+                }
+                else
+                {
+                    // If we can't query, at least use better defaults
+                    var fallbackQueryId = $"CSAS_{safeName.ToUpperInvariant()}_{Guid.NewGuid():N}";
+                    var fallbackTopic = safeName.ToUpperInvariant();
+                    
+                    stream.KsqlQueryId = fallbackQueryId;
+                    stream.OutputTopic = fallbackTopic;
+                    stream.IsActive = true;
+                    
+                    await _context.SaveChangesAsync();
+                    
+                    _logger.LogWarning("Could not query ksqlDB for actual IDs, using fallbacks for stream {StreamId}", id);
+                    return Ok(new { QueryId = fallbackQueryId, OutputTopic = fallbackTopic });
+                }
             }
             else
             {
