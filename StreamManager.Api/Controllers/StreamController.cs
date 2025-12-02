@@ -79,6 +79,8 @@ public class StreamController : ControllerBase
             
             if (response.IsSuccessStatusCode)
             {
+                // Store the actual stream name for later cleanup
+                stream.KsqlStreamName = safeName;
                 // Query ksqlDB to get the actual created query ID and topic
                 var showQueriesPayload = new { ksql = "SHOW QUERIES;" };
                 var showQueriesJson = JsonSerializer.Serialize(showQueriesPayload);
@@ -246,6 +248,7 @@ public class StreamController : ControllerBase
             stream.KsqlScript = request.KsqlScript.Trim();
             stream.IsActive = false;
             stream.KsqlQueryId = null;
+            stream.KsqlStreamName = null;
             stream.OutputTopic = null;
 
             await _context.SaveChangesAsync();
@@ -288,10 +291,9 @@ public class StreamController : ControllerBase
             }
 
             // Step 2: Drop the stream and delete its topic
-            if (!string.IsNullOrWhiteSpace(stream.OutputTopic))
+            if (!string.IsNullOrWhiteSpace(stream.KsqlStreamName))
             {
-                var safeName = GenerateSafeName(stream.Name);
-                var dropSql = $"DROP STREAM IF EXISTS {safeName} DELETE TOPIC;";
+                var dropSql = $"DROP STREAM IF EXISTS {stream.KsqlStreamName} DELETE TOPIC;";
                 var dropPayload = new { ksql = dropSql };
                 var dropJsonContent = JsonSerializer.Serialize(dropPayload);
                 var dropHttpContent = new StringContent(dropJsonContent, Encoding.UTF8, "application/json");
@@ -302,7 +304,12 @@ public class StreamController : ControllerBase
                 {
                     var errorContent = await dropResponse.Content.ReadAsStringAsync();
                     _logger.LogWarning("Failed to drop stream {StreamName} for stream {StreamId}: {Error}", 
-                        safeName, id, errorContent);
+                        stream.KsqlStreamName, id, errorContent);
+                }
+                else
+                {
+                    _logger.LogInformation("Successfully dropped stream {StreamName} and topic for stream {StreamId}", 
+                        stream.KsqlStreamName, id);
                 }
             }
 

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using StreamManager.Api.Data;
@@ -11,9 +12,11 @@ using StreamManager.Api.Data;
 namespace StreamManager.Api.Migrations
 {
     [DbContext(typeof(StreamManagerDbContext))]
-    partial class StreamManagerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251202171802_AddKsqlStreamName")]
+    partial class AddKsqlStreamName
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
