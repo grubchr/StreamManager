@@ -1,9 +1,14 @@
 using Microsoft.EntityFrameworkCore;
+using StreamManager.Api.Configuration;
 using StreamManager.Api.Data;
 using StreamManager.Api.Services;
 using StreamManager.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Bind configuration
+builder.Services.Configure<ResourceLimitsOptions>(
+    builder.Configuration.GetSection(ResourceLimitsOptions.SectionName));
 
 // Add services to the container
 builder.Services.AddControllers();
@@ -39,6 +44,8 @@ builder.Services.AddHttpClient<AdHocKsqlService>(client =>
 
 // Register custom services
 builder.Services.AddScoped<AdHocKsqlService>();
+builder.Services.AddSingleton<KsqlQueryValidator>();
+builder.Services.AddSingleton<QueryRateLimiter>();
 builder.Services.AddHostedService<TopicProxyService>();
 
 var app = builder.Build();

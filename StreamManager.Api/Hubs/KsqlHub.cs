@@ -8,12 +8,18 @@ namespace StreamManager.Api.Hubs;
 public class KsqlHub : Hub
 {
     private readonly AdHocKsqlService _adHocKsqlService;
+    private readonly QueryRateLimiter _rateLimiter;
     private readonly ILogger<KsqlHub> _logger;
     private readonly StreamManagerDbContext _context;
 
-    public KsqlHub(AdHocKsqlService adHocKsqlService, ILogger<KsqlHub> logger, StreamManagerDbContext context)
+    public KsqlHub(
+        AdHocKsqlService adHocKsqlService, 
+        QueryRateLimiter rateLimiter,
+        ILogger<KsqlHub> logger, 
+        StreamManagerDbContext context)
     {
         _adHocKsqlService = adHocKsqlService;
+        _rateLimiter = rateLimiter;
         _logger = logger;
         _context = context;
     }
@@ -23,23 +29,36 @@ public class KsqlHub : Hub
         if (string.IsNullOrWhiteSpace(ksql))
             throw new ArgumentException("KSQL query cannot be empty", nameof(ksql));
 
-        var trimmedKsql = ksql.Trim();
-        
-        if (!trimmedKsql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only SELECT queries are allowed for ad-hoc execution", nameof(ksql));
+        var userId = Context.ConnectionId; // In production, use actual user ID from authentication
 
-        // Append EMIT CHANGES if not present
-        if (!trimmedKsql.Contains("EMIT CHANGES", StringComparison.OrdinalIgnoreCase))
+        // Check rate limits
+        var rateLimitResult = _rateLimiter.CanExecuteAdHocQuery(userId);
+        if (!rateLimitResult.IsAllowed)
         {
-            trimmedKsql = trimmedKsql.TrimEnd(';') + " EMIT CHANGES;";
+            _logger.LogWarning("Rate limit exceeded for user {UserId}: {Message}", userId, rateLimitResult.ErrorMessage);
+            throw new InvalidOperationException(rateLimitResult.ErrorMessage);
         }
 
-        _logger.LogInformation("Executing ad-hoc query for connection {ConnectionId}", Context.ConnectionId);
-
-        await foreach (var result in _adHocKsqlService.ExecuteQueryStreamAsync(trimmedKsql, cancellationToken))
+        try
         {
-            yield return result;
+            _logger.LogInformation("Executing ad-hoc query for connection {ConnectionId}", Context.ConnectionId);
+
+            await foreach (var result in _adHocKsqlService.ExecuteQueryStreamAsync(ksql, cancellationToken))
+            {
+                yield return result;
+            }
         }
+        finally
+        {
+            // Release the query slot when done
+            _rateLimiter.ReleaseAdHocQuery(userId);
+        }
+    }
+    
+    public async Task<QueryLimitsInfo> GetQueryLimits()
+    {
+        var userId = Context.ConnectionId; // In production, use actual user ID
+        return _rateLimiter.GetLimitsInfo(userId);
     }
 
     public async Task JoinStreamGroup(string topicName)

@@ -4,6 +4,7 @@ using StreamManager.Api.Data;
 using StreamManager.Api.Models;
 using System.Text;
 using System.Text.Json;
+using StreamManager.Api.Services;
 
 namespace StreamManager.Api.Controllers;
 
@@ -13,13 +14,23 @@ public class StreamController : ControllerBase
 {
     private readonly StreamManagerDbContext _context;
     private readonly HttpClient _httpClient;
+    private readonly KsqlQueryValidator _validator;
+    private readonly QueryRateLimiter _rateLimiter;
     private readonly ILogger<StreamController> _logger;
     private readonly string _ksqlDbUrl;
 
-    public StreamController(StreamManagerDbContext context, HttpClient httpClient, ILogger<StreamController> logger, IConfiguration configuration)
+    public StreamController(
+        StreamManagerDbContext context, 
+        HttpClient httpClient, 
+        KsqlQueryValidator validator,
+        QueryRateLimiter rateLimiter,
+        ILogger<StreamController> logger, 
+        IConfiguration configuration)
     {
         _context = context;
         _httpClient = httpClient;
+        _validator = validator;
+        _rateLimiter = rateLimiter;
         _logger = logger;
         _ksqlDbUrl = configuration.GetConnectionString("KsqlDb") ?? "http://localhost:8088";
     }
@@ -46,6 +57,21 @@ public class StreamController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.KsqlScript))
             return BadRequest("Name and KsqlScript are required");
 
+        // Validate the query
+        var validation = _validator.ValidatePersistentQuery(request.KsqlScript, request.Name);
+        if (!validation.IsValid)
+        {
+            _logger.LogWarning("Query validation failed for stream {Name}: {Error}", request.Name, validation.ErrorMessage);
+            return BadRequest(new { error = validation.ErrorMessage });
+        }
+
+        // Log warnings
+        if (validation.Warnings.Any())
+        {
+            _logger.LogInformation("Query warnings for stream {Name}: {Warnings}", 
+                request.Name, string.Join("; ", validation.Warnings));
+        }
+
         var stream = new StreamDefinition
         {
             Name = request.Name.Trim(),
@@ -66,6 +92,15 @@ public class StreamController : ControllerBase
         if (stream == null)
             return NotFound();
 
+        // Check rate limits (use stream owner ID in production)
+        var userId = "system"; // Replace with actual user ID from authentication
+        var rateLimitResult = _rateLimiter.CanCreatePersistentQuery(userId);
+        if (!rateLimitResult.IsAllowed)
+        {
+            _logger.LogWarning("Rate limit exceeded for deployment by user {UserId}: {Message}", userId, rateLimitResult.ErrorMessage);
+            return BadRequest(new { error = rateLimitResult.ErrorMessage });
+        }
+
         try
         {
             var safeName = GenerateSafeName(stream.Name);
@@ -79,6 +114,8 @@ public class StreamController : ControllerBase
             
             if (response.IsSuccessStatusCode)
             {
+                // Store the actual stream name for later cleanup
+                stream.KsqlStreamName = safeName;
                 // Query ksqlDB to get the actual created query ID and topic
                 var showQueriesPayload = new { ksql = "SHOW QUERIES;" };
                 var showQueriesJson = JsonSerializer.Serialize(showQueriesPayload);
@@ -246,6 +283,7 @@ public class StreamController : ControllerBase
             stream.KsqlScript = request.KsqlScript.Trim();
             stream.IsActive = false;
             stream.KsqlQueryId = null;
+            stream.KsqlStreamName = null;
             stream.OutputTopic = null;
 
             await _context.SaveChangesAsync();
@@ -267,24 +305,96 @@ public class StreamController : ControllerBase
         if (stream == null)
             return NotFound();
 
+        // Release the rate limit slot
+        var userId = "system"; // Replace with actual user ID
+        _rateLimiter.ReleasePersistentQuery(userId);
+
         try
         {
-            // Stop the stream if active
+            var errors = new List<string>();
+            
+            // Step 1: Terminate the query if active
             if (stream.IsActive && !string.IsNullOrWhiteSpace(stream.KsqlQueryId))
             {
-                var terminateSql = $"TERMINATE {stream.KsqlQueryId};";
-                var payload = new { ksql = terminateSql };
-                var jsonContent = JsonSerializer.Serialize(payload);
-                var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                
-                await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
+                try
+                {
+                    var terminateSql = $"TERMINATE {stream.KsqlQueryId};";
+                    var payload = new { ksql = terminateSql };
+                    var jsonContent = JsonSerializer.Serialize(payload);
+                    var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                    
+                    var terminateResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
+                    
+                    if (!terminateResponse.IsSuccessStatusCode)
+                    {
+                        var errorContent = await terminateResponse.Content.ReadAsStringAsync();
+                        _logger.LogWarning("Failed to terminate query {QueryId} for stream {StreamId}: {Error}", 
+                            stream.KsqlQueryId, id, errorContent);
+                        errors.Add($"Terminate failed: {errorContent}");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Successfully terminated query {QueryId} for stream {StreamId}", 
+                            stream.KsqlQueryId, id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Exception while terminating query {QueryId} for stream {StreamId}", 
+                        stream.KsqlQueryId, id);
+                    errors.Add($"Terminate exception: {ex.Message}");
+                }
             }
 
+            // Step 2: Drop the stream and delete its topic (always attempt, even if terminate failed)
+            if (!string.IsNullOrWhiteSpace(stream.KsqlStreamName))
+            {
+                try
+                {
+                    var dropSql = $"DROP STREAM IF EXISTS {stream.KsqlStreamName} DELETE TOPIC;";
+                    var dropPayload = new { ksql = dropSql };
+                    var dropJsonContent = JsonSerializer.Serialize(dropPayload);
+                    var dropHttpContent = new StringContent(dropJsonContent, Encoding.UTF8, "application/json");
+                    
+                    var dropResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", dropHttpContent);
+                    
+                    if (!dropResponse.IsSuccessStatusCode)
+                    {
+                        var errorContent = await dropResponse.Content.ReadAsStringAsync();
+                        _logger.LogWarning("Failed to drop stream {StreamName} for stream {StreamId}: {Error}", 
+                            stream.KsqlStreamName, id, errorContent);
+                        errors.Add($"Drop stream failed: {errorContent}");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Successfully dropped stream {StreamName} and topic for stream {StreamId}", 
+                            stream.KsqlStreamName, id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Exception while dropping stream {StreamName} for stream {StreamId}", 
+                        stream.KsqlStreamName, id);
+                    errors.Add($"Drop stream exception: {ex.Message}");
+                }
+            }
+
+            // Step 3: Remove from database (always do this, even if ksqlDB cleanup failed)
             _context.StreamDefinitions.Remove(stream);
             await _context.SaveChangesAsync();
             
-            _logger.LogInformation("Successfully deleted stream {StreamId}", id);
-            return Ok();
+            _logger.LogInformation("Successfully deleted stream {StreamId} from database", id);
+            
+            // Return success, but include warnings if there were issues
+            if (errors.Count > 0)
+            {
+                return Ok(new { 
+                    message = "Stream deleted from database, but some cleanup operations failed", 
+                    warnings = errors 
+                });
+            }
+            
+            return Ok(new { message = "Stream fully deleted" });
         }
         catch (Exception ex)
         {
