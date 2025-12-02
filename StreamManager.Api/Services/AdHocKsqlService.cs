@@ -8,26 +8,52 @@ public class AdHocKsqlService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<AdHocKsqlService> _logger;
+    private readonly KsqlQueryValidator _validator;
     private readonly string _ksqlDbUrl;
 
-    public AdHocKsqlService(HttpClient httpClient, ILogger<AdHocKsqlService> logger, IConfiguration configuration)
+    public AdHocKsqlService(
+        HttpClient httpClient, 
+        ILogger<AdHocKsqlService> logger, 
+        KsqlQueryValidator validator,
+        IConfiguration configuration)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _validator = validator;
         _ksqlDbUrl = configuration.GetConnectionString("KsqlDb") ?? "http://localhost:8088";
     }
 
-    public async IAsyncEnumerable<string> ExecuteQueryStreamAsync(string ksql, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<string> ExecuteQueryStreamAsync(
+        string ksql, 
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Starting ksql query: {Ksql}", ksql);
+        
+        // Validate query
+        var validation = _validator.ValidateAdHocQuery(ksql);
+        if (!validation.IsValid)
+        {
+            _logger.LogWarning("Query validation failed: {Error}", validation.ErrorMessage);
+            throw new InvalidOperationException($"Query validation failed: {validation.ErrorMessage}");
+        }
+
+        // Log warnings
+        foreach (var warning in validation.Warnings)
+        {
+            _logger.LogInformation("Query warning: {Warning}", warning);
+        }
+
+        // Ensure EMIT CHANGES is present
+        if (!ksql.ToUpperInvariant().Contains("EMIT CHANGES"))
+        {
+            ksql = ksql.TrimEnd(';') + " EMIT CHANGES;";
+            _logger.LogInformation("Added EMIT CHANGES to query");
+        }
         
         var payload = new
         {
             ksql = ksql,
-            streamsProperties = new Dictionary<string, object>
-            {
-                { "ksql.streams.auto.offset.reset", "earliest" }
-            }
+            streamsProperties = _validator.GenerateStreamProperties(isAdHoc: true)
         };
 
         var jsonContent = JsonSerializer.Serialize(payload);

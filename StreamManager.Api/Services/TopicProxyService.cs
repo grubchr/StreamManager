@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Confluent.Kafka;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,8 @@ public class TopicProxyService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IHubContext<KsqlHub> _hubContext;
     private readonly ILogger<TopicProxyService> _logger;
-    private readonly Dictionary<string, IConsumer<string, string>> _consumers = new();
+    private readonly ConcurrentDictionary<string, IConsumer<string, string>> _consumers = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _consumerCancellations = new();
     private readonly string _kafkaBootstrapServers;
 
     public TopicProxyService(IServiceProvider serviceProvider, IHubContext<KsqlHub> hubContext, 
@@ -61,10 +63,13 @@ public class TopicProxyService : BackgroundService
                 try
                 {
                     var consumer = CreateConsumer(stream.OutputTopic);
-                    _consumers[stream.OutputTopic] = consumer;
+                    var cts = new CancellationTokenSource();
                     
-                    // Start consuming in background task
-                    _ = Task.Run(() => ConsumeTopicAsync(consumer, stream.OutputTopic, cancellationToken), cancellationToken);
+                    _consumers[stream.OutputTopic] = consumer;
+                    _consumerCancellations[stream.OutputTopic] = cts;
+                    
+                    // Start consuming in background task with dedicated cancellation token
+                    _ = Task.Run(() => ConsumeTopicAsync(consumer, stream.OutputTopic, cts.Token), cancellationToken);
                     
                     _logger.LogInformation("Started consuming topic {TopicName}", stream.OutputTopic);
                 }
@@ -81,44 +86,50 @@ public class TopicProxyService : BackgroundService
 
         foreach (var topic in consumersToRemove)
         {
-            try
+            // Step 1: Signal the consumption loop to stop
+            if (_consumerCancellations.TryRemove(topic, out var cts))
             {
-                if (_consumers.TryGetValue(topic, out var consumer))
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error cancelling consumer for topic {TopicName}", topic);
+                }
+            }
+            
+            // Step 2: Remove consumer from dictionary so it won't be used
+            if (_consumers.TryRemove(topic, out var consumer))
+            {
+                // Step 3: Dispose in a background task with delays to allow graceful shutdown
+                _ = Task.Run(async () =>
                 {
                     try
                     {
-                        consumer.Unsubscribe();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error unsubscribing consumer for topic {TopicName}", topic);
-                    }
-                    
-                    try
-                    {
+                        // Wait for consumption loop to detect cancellation and exit
+                        // Consumer.Consume() can block for up to 1 second, so we need to wait at least that long
+                        await Task.Delay(1500);
+                        
+                        // Close gracefully
                         consumer.Close();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error closing consumer for topic {TopicName}", topic);
-                    }
-                    
-                    try
-                    {
+                        
+                        // Small delay before dispose
+                        await Task.Delay(200);
+                        
                         consumer.Dispose();
+                        
+                        _logger.LogInformation("Stopped consuming topic {TopicName}", topic);
                     }
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "Error disposing consumer for topic {TopicName}", topic);
                     }
-                    
-                    _consumers.Remove(topic);
-                    _logger.LogInformation("Stopped consuming topic {TopicName}", topic);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error stopping consumer for topic {TopicName}", topic);
+                    finally
+                    {
+                        cts?.Dispose();
+                    }
+                });
             }
         }
     }
@@ -139,7 +150,7 @@ public class TopicProxyService : BackgroundService
         _logger.LogInformation("Subscribing to topic {TopicName} (actual: {ActualTopicName})", topicName, actualTopicName);
         consumer.Subscribe(actualTopicName);
 
-                    while (!cancellationToken.IsCancellationRequested && _consumers.ContainsKey(topicName))
+                    while (!cancellationToken.IsCancellationRequested)
                     {
                         try
                         {
@@ -189,6 +200,10 @@ public class TopicProxyService : BackgroundService
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Consumer for topic {TopicName} was cancelled", topicName);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in consumer for topic {TopicName}", topicName);
@@ -227,48 +242,62 @@ public class TopicProxyService : BackgroundService
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        // Clean up all consumers more defensively
-        var consumersToCleanup = _consumers.ToList();
-        foreach (var kvp in consumersToCleanup)
+        _logger.LogInformation("TopicProxyService stopping - disposing all consumers safely");
+        
+        // Step 1: Cancel all consumption loops
+        foreach (var cts in _consumerCancellations.Values)
         {
             try
             {
-                var consumer = kvp.Value;
-                
-                try
-                {
-                    consumer.Unsubscribe();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error unsubscribing consumer for topic {TopicName}", kvp.Key);
-                }
-                
-                try
-                {
-                    consumer.Close();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error closing consumer for topic {TopicName}", kvp.Key);
-                }
-                
-                try
-                {
-                    consumer.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error disposing consumer for topic {TopicName}", kvp.Key);
-                }
+                cts.Cancel();
+            }
+            catch { }
+        }
+        
+        // Step 2: Wait for consumption loops to exit (Consume() can block up to 1 second)
+        await Task.Delay(1500, cancellationToken);
+        
+        // Step 3: Get all consumers and clear dictionaries
+        var consumersToCleanup = new List<(IConsumer<string, string> Consumer, CancellationTokenSource? Cts)>();
+        foreach (var kvp in _consumers)
+        {
+            if (_consumers.TryRemove(kvp.Key, out var consumer))
+            {
+                _consumerCancellations.TryRemove(kvp.Key, out var cts);
+                consumersToCleanup.Add((consumer, cts));
+            }
+        }
+        
+        // Step 4: Dispose consumers in parallel background tasks
+        var disposalTasks = consumersToCleanup.Select(item => Task.Run(() =>
+        {
+            try
+            {
+                item.Consumer.Close();
+                Thread.Sleep(100);
+                item.Consumer.Dispose();
+                item.Cts?.Dispose();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error cleaning up consumer for topic {TopicName}", kvp.Key);
+                _logger.LogWarning(ex, "Error disposing consumer during shutdown");
             }
+        })).ToArray();
+        
+        // Step 5: Wait for all disposal tasks to complete (with timeout)
+        try
+        {
+            await Task.WhenAny(
+                Task.WhenAll(disposalTasks),
+                Task.Delay(TimeSpan.FromSeconds(5), cancellationToken)
+            );
         }
-        _consumers.Clear();
-
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Timeout or error waiting for consumer disposal");
+        }
+        
+        _logger.LogInformation("TopicProxyService stopped - all consumers disposed");
         await base.StopAsync(cancellationToken);
     }
 }

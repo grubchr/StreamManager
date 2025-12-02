@@ -4,6 +4,7 @@ using StreamManager.Api.Data;
 using StreamManager.Api.Models;
 using System.Text;
 using System.Text.Json;
+using StreamManager.Api.Services;
 
 namespace StreamManager.Api.Controllers;
 
@@ -13,13 +14,23 @@ public class StreamController : ControllerBase
 {
     private readonly StreamManagerDbContext _context;
     private readonly HttpClient _httpClient;
+    private readonly KsqlQueryValidator _validator;
+    private readonly QueryRateLimiter _rateLimiter;
     private readonly ILogger<StreamController> _logger;
     private readonly string _ksqlDbUrl;
 
-    public StreamController(StreamManagerDbContext context, HttpClient httpClient, ILogger<StreamController> logger, IConfiguration configuration)
+    public StreamController(
+        StreamManagerDbContext context, 
+        HttpClient httpClient, 
+        KsqlQueryValidator validator,
+        QueryRateLimiter rateLimiter,
+        ILogger<StreamController> logger, 
+        IConfiguration configuration)
     {
         _context = context;
         _httpClient = httpClient;
+        _validator = validator;
+        _rateLimiter = rateLimiter;
         _logger = logger;
         _ksqlDbUrl = configuration.GetConnectionString("KsqlDb") ?? "http://localhost:8088";
     }
@@ -46,6 +57,21 @@ public class StreamController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.KsqlScript))
             return BadRequest("Name and KsqlScript are required");
 
+        // Validate the query
+        var validation = _validator.ValidatePersistentQuery(request.KsqlScript, request.Name);
+        if (!validation.IsValid)
+        {
+            _logger.LogWarning("Query validation failed for stream {Name}: {Error}", request.Name, validation.ErrorMessage);
+            return BadRequest(new { error = validation.ErrorMessage });
+        }
+
+        // Log warnings
+        if (validation.Warnings.Any())
+        {
+            _logger.LogInformation("Query warnings for stream {Name}: {Warnings}", 
+                request.Name, string.Join("; ", validation.Warnings));
+        }
+
         var stream = new StreamDefinition
         {
             Name = request.Name.Trim(),
@@ -65,6 +91,15 @@ public class StreamController : ControllerBase
         var stream = await _context.StreamDefinitions.FindAsync(id);
         if (stream == null)
             return NotFound();
+
+        // Check rate limits (use stream owner ID in production)
+        var userId = "system"; // Replace with actual user ID from authentication
+        var rateLimitResult = _rateLimiter.CanCreatePersistentQuery(userId);
+        if (!rateLimitResult.IsAllowed)
+        {
+            _logger.LogWarning("Rate limit exceeded for deployment by user {UserId}: {Message}", userId, rateLimitResult.ErrorMessage);
+            return BadRequest(new { error = rateLimitResult.ErrorMessage });
+        }
 
         try
         {
@@ -269,6 +304,10 @@ public class StreamController : ControllerBase
         var stream = await _context.StreamDefinitions.FindAsync(id);
         if (stream == null)
             return NotFound();
+
+        // Release the rate limit slot
+        var userId = "system"; // Replace with actual user ID
+        _rateLimiter.ReleasePersistentQuery(userId);
 
         try
         {
