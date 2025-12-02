@@ -269,7 +269,7 @@ public class StreamController : ControllerBase
 
         try
         {
-            // Stop the stream if active
+            // Step 1: Terminate the query if active
             if (stream.IsActive && !string.IsNullOrWhiteSpace(stream.KsqlQueryId))
             {
                 var terminateSql = $"TERMINATE {stream.KsqlQueryId};";
@@ -277,9 +277,36 @@ public class StreamController : ControllerBase
                 var jsonContent = JsonSerializer.Serialize(payload);
                 var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
                 
-                await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
+                var terminateResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
+                
+                if (!terminateResponse.IsSuccessStatusCode)
+                {
+                    var errorContent = await terminateResponse.Content.ReadAsStringAsync();
+                    _logger.LogWarning("Failed to terminate query {QueryId} for stream {StreamId}: {Error}", 
+                        stream.KsqlQueryId, id, errorContent);
+                }
             }
 
+            // Step 2: Drop the stream and delete its topic
+            if (!string.IsNullOrWhiteSpace(stream.OutputTopic))
+            {
+                var safeName = GenerateSafeName(stream.Name);
+                var dropSql = $"DROP STREAM IF EXISTS {safeName} DELETE TOPIC;";
+                var dropPayload = new { ksql = dropSql };
+                var dropJsonContent = JsonSerializer.Serialize(dropPayload);
+                var dropHttpContent = new StringContent(dropJsonContent, Encoding.UTF8, "application/json");
+                
+                var dropResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", dropHttpContent);
+                
+                if (!dropResponse.IsSuccessStatusCode)
+                {
+                    var errorContent = await dropResponse.Content.ReadAsStringAsync();
+                    _logger.LogWarning("Failed to drop stream {StreamName} for stream {StreamId}: {Error}", 
+                        safeName, id, errorContent);
+                }
+            }
+
+            // Step 3: Remove from database
             _context.StreamDefinitions.Remove(stream);
             await _context.SaveChangesAsync();
             
