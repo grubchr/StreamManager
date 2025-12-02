@@ -17,6 +17,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{9DFD
 	ProjectSection(SolutionItems) = preProject
 		scripts\calculate_resources.sh = scripts\calculate_resources.sh
 		scripts\generate_orders.sh = scripts\generate_orders.sh
+		scripts\cleanup-ksqldb.sh = scripts\cleanup-ksqldb.sh
 	EndProjectSection
 EndProject
 Global

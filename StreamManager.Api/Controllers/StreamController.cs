@@ -311,53 +311,90 @@ public class StreamController : ControllerBase
 
         try
         {
+            var errors = new List<string>();
+            
             // Step 1: Terminate the query if active
             if (stream.IsActive && !string.IsNullOrWhiteSpace(stream.KsqlQueryId))
             {
-                var terminateSql = $"TERMINATE {stream.KsqlQueryId};";
-                var payload = new { ksql = terminateSql };
-                var jsonContent = JsonSerializer.Serialize(payload);
-                var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                
-                var terminateResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
-                
-                if (!terminateResponse.IsSuccessStatusCode)
+                try
                 {
-                    var errorContent = await terminateResponse.Content.ReadAsStringAsync();
-                    _logger.LogWarning("Failed to terminate query {QueryId} for stream {StreamId}: {Error}", 
-                        stream.KsqlQueryId, id, errorContent);
+                    var terminateSql = $"TERMINATE {stream.KsqlQueryId};";
+                    var payload = new { ksql = terminateSql };
+                    var jsonContent = JsonSerializer.Serialize(payload);
+                    var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                    
+                    var terminateResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", httpContent);
+                    
+                    if (!terminateResponse.IsSuccessStatusCode)
+                    {
+                        var errorContent = await terminateResponse.Content.ReadAsStringAsync();
+                        _logger.LogWarning("Failed to terminate query {QueryId} for stream {StreamId}: {Error}", 
+                            stream.KsqlQueryId, id, errorContent);
+                        errors.Add($"Terminate failed: {errorContent}");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Successfully terminated query {QueryId} for stream {StreamId}", 
+                            stream.KsqlQueryId, id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Exception while terminating query {QueryId} for stream {StreamId}", 
+                        stream.KsqlQueryId, id);
+                    errors.Add($"Terminate exception: {ex.Message}");
                 }
             }
 
-            // Step 2: Drop the stream and delete its topic
+            // Step 2: Drop the stream and delete its topic (always attempt, even if terminate failed)
             if (!string.IsNullOrWhiteSpace(stream.KsqlStreamName))
             {
-                var dropSql = $"DROP STREAM IF EXISTS {stream.KsqlStreamName} DELETE TOPIC;";
-                var dropPayload = new { ksql = dropSql };
-                var dropJsonContent = JsonSerializer.Serialize(dropPayload);
-                var dropHttpContent = new StringContent(dropJsonContent, Encoding.UTF8, "application/json");
-                
-                var dropResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", dropHttpContent);
-                
-                if (!dropResponse.IsSuccessStatusCode)
+                try
                 {
-                    var errorContent = await dropResponse.Content.ReadAsStringAsync();
-                    _logger.LogWarning("Failed to drop stream {StreamName} for stream {StreamId}: {Error}", 
-                        stream.KsqlStreamName, id, errorContent);
+                    var dropSql = $"DROP STREAM IF EXISTS {stream.KsqlStreamName} DELETE TOPIC;";
+                    var dropPayload = new { ksql = dropSql };
+                    var dropJsonContent = JsonSerializer.Serialize(dropPayload);
+                    var dropHttpContent = new StringContent(dropJsonContent, Encoding.UTF8, "application/json");
+                    
+                    var dropResponse = await _httpClient.PostAsync($"{_ksqlDbUrl}/ksql", dropHttpContent);
+                    
+                    if (!dropResponse.IsSuccessStatusCode)
+                    {
+                        var errorContent = await dropResponse.Content.ReadAsStringAsync();
+                        _logger.LogWarning("Failed to drop stream {StreamName} for stream {StreamId}: {Error}", 
+                            stream.KsqlStreamName, id, errorContent);
+                        errors.Add($"Drop stream failed: {errorContent}");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Successfully dropped stream {StreamName} and topic for stream {StreamId}", 
+                            stream.KsqlStreamName, id);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    _logger.LogInformation("Successfully dropped stream {StreamName} and topic for stream {StreamId}", 
+                    _logger.LogWarning(ex, "Exception while dropping stream {StreamName} for stream {StreamId}", 
                         stream.KsqlStreamName, id);
+                    errors.Add($"Drop stream exception: {ex.Message}");
                 }
             }
 
-            // Step 3: Remove from database
+            // Step 3: Remove from database (always do this, even if ksqlDB cleanup failed)
             _context.StreamDefinitions.Remove(stream);
             await _context.SaveChangesAsync();
             
-            _logger.LogInformation("Successfully deleted stream {StreamId}", id);
-            return Ok();
+            _logger.LogInformation("Successfully deleted stream {StreamId} from database", id);
+            
+            // Return success, but include warnings if there were issues
+            if (errors.Count > 0)
+            {
+                return Ok(new { 
+                    message = "Stream deleted from database, but some cleanup operations failed", 
+                    warnings = errors 
+                });
+            }
+            
+            return Ok(new { message = "Stream fully deleted" });
         }
         catch (Exception ex)
         {
