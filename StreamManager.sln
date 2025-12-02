@@ -4,6 +4,21 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StreamManager.Web", "Stream
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StreamManager.Api", "StreamManager.Api\StreamManager.Api.csproj", "{AFC659BA-F464-42B0-A0B1-A6C5F120BF53}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{6404E212-FFAD-4655-8BEF-49A38F6723A0}"
+	ProjectSection(SolutionItems) = preProject
+		docs\ADHOC_QUERY_COSTS.md = docs\ADHOC_QUERY_COSTS.md
+		docs\BEST_PRACTICES.md = docs\BEST_PRACTICES.md
+		docs\CAPACITY_PLANNING.md = docs\CAPACITY_PLANNING.md
+		docs\Plan.md = docs\Plan.md
+		docs\RESOURCE_LIMITS.md = docs\RESOURCE_LIMITS.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{9DFD86B1-2CA9-408F-92C1-455063B2D396}"
+	ProjectSection(SolutionItems) = preProject
+		scripts\calculate_resources.sh = scripts\calculate_resources.sh
+		scripts\generate_orders.sh = scripts\generate_orders.sh
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
