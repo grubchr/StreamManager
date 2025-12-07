@@ -62,7 +62,7 @@ The implementation uses the **Strategy Pattern** with dependency injection to pr
       "Url": "http://ksqldb-server:8088"
     },
     "Flink": {
-      "JobManagerUrl": "http://flink-jobmanager:8081",
+      "JobManagerUrl": "http://flink-jobmanager:8088",
       "KafkaBrokers": "kafka:9092"
     }
   }

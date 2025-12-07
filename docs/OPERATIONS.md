@@ -527,10 +527,10 @@ curl http://localhost:8088/ksql -d '{"ksql": "SHOW QUERIES;"}'
 #### **Flink Health**
 ```bash
 # Check JobManager
-curl http://localhost:8081/overview
+curl http://localhost:8088/overview
 
 # List running jobs
-curl http://localhost:8081/jobs
+curl http://localhost:8088/jobs
 ```
 
 ### Common Issues & Solutions

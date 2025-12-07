@@ -95,8 +95,8 @@ GROUP BY customer_id;
 | **API** | 7068 | https://localhost:7068 |
 | **Web UI** | 7122 | https://localhost:7122 |
 | **ksqlDB** | 8088 | http://localhost:8088 |
-| **Flink REST** | 8081 | http://localhost:8081 |
-| **Flink SQL** | 8083 | http://localhost:8083 |
+| **Flink REST** | 8088 | http://localhost:8088 |
+| **Flink SQL** | 8082 | http://localhost:8082 |
 | **Kafka** | 9092 | localhost:9092 |
 | **Postgres** | 5432 | localhost:5432 |
 
@@ -135,7 +135,7 @@ docker logs ksqldb-server
 ```bash
 # Wait 60 seconds after docker-compose up
 docker logs flink-sql-gateway
-curl http://localhost:8083/v1/info
+curl http://localhost:8082/v1/info
 ```
 
 ### Build Errors
@@ -163,10 +163,10 @@ curl http://localhost:8088/info
 ### Flink
 ```bash
 # SQL Gateway
-curl http://localhost:8083/v1/info
+curl http://localhost:8082/v1/info
 
 # REST API
-curl http://localhost:8081/overview
+curl http://localhost:8088/overview
 ```
 
 ### Kafka
@@ -215,7 +215,7 @@ curl https://localhost:7068/api/streams -k
 1. **ksqlDB** is simpler for getting started
 2. **Flink** is better for large scale (100+ queries)
 3. Use `LIMIT` in ad-hoc queries to avoid overwhelming the system
-4. Monitor Flink Web UI at http://localhost:8081
+4. Monitor Flink Web UI at http://localhost:8088
 5. Check logs when things go wrong
 6. Test queries with `/api/test/query` endpoint first
 

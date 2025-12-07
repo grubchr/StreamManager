@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Shared services used by both ksqlDB and Flink deployments
 services:
   broker:

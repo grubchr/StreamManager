@@ -88,8 +88,8 @@ Edit `StreamManager.Api/appsettings.json`:
   "StreamEngine": {
     "Provider": "Flink",
     "Flink": {
-      "SqlGatewayUrl": "http://localhost:8083",
-      "RestApiUrl": "http://localhost:8081"
+      "SqlGatewayUrl": "http://localhost:8082",
+      "RestApiUrl": "http://localhost:8088"
     }
   }
 }
@@ -124,15 +124,15 @@ Web UI available at: **https://localhost:7122**
 
 Check Flink JobManager is running:
 ```bash
-curl http://localhost:8081/overview
+curl http://localhost:8088/overview
 ```
 
 Check Flink SQL Gateway is running:
 ```bash
-curl http://localhost:8083/v1/info
+curl http://localhost:8082/v1/info
 ```
 
-Access Flink Web UI: **http://localhost:8081**
+Access Flink Web UI: **http://localhost:8088**
 
 ---
 
@@ -184,12 +184,12 @@ Or use the Flink SQL Gateway directly:
 
 ```bash
 # Open a Flink SQL session
-SESSION_ID=$(curl -X POST http://localhost:8083/v1/sessions \
+SESSION_ID=$(curl -X POST http://localhost:8082/v1/sessions \
   -H "Content-Type: application/json" \
   -d '{"properties": {}}' | jq -r '.sessionHandle')
 
 # Create the orders table
-curl -X POST http://localhost:8083/v1/sessions/$SESSION_ID/statements \
+curl -X POST http://localhost:8082/v1/sessions/$SESSION_ID/statements \
   -H "Content-Type: application/json" \
   -d '{
     "statement": "CREATE TABLE IF NOT EXISTS orders (ORDER_ID INT, CUSTOMER_ID INT, PRODUCT STRING, AMOUNT DOUBLE, PURCHASE_DATE STRING) WITH ('\''connector'\'' = '\''kafka'\'', '\''topic'\'' = '\''orders'\'', '\''properties.bootstrap.servers'\'' = '\''kafka:9092'\'', '\''format'\'' = '\''json'\'', '\''scan.startup.mode'\'' = '\''earliest-offset'\'')"
@@ -348,8 +348,8 @@ GROUP BY customer_id;
 | **Schema Registry** | 8081 | Avro schema management |
 | **PostgreSQL** | 5432 | Application database |
 | **ksqlDB Server** | 8088 | ksqlDB REST API (ksqlDB only) |
-| **Flink JobManager** | 8081 | Flink Web UI & REST API (Flink only) |
-| **Flink SQL Gateway** | 8083 | SQL submission API (Flink only) |
+| **Flink JobManager** | 8088 | Flink Web UI & REST API (Flink only) |
+| **Flink SQL Gateway** | 8082 | SQL submission API (Flink only) |
 | **API Server** | 7068 | Stream Manager API |
 | **Web UI** | 7122 | Stream Manager Web Interface |
 

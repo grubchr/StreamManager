@@ -147,8 +147,8 @@ The frontend MVC web application that provides:
      "StreamEngine": {
        "Provider": "Flink",
        "Flink": {
-         "SqlGatewayUrl": "http://localhost:8083",
-         "RestApiUrl": "http://localhost:8081",
+         "SqlGatewayUrl": "http://localhost:8082",
+         "RestApiUrl": "http://localhost:8088",
          "KafkaBootstrapServers": "localhost:9092",
          "KafkaFormat": "json"
        }
@@ -179,13 +179,13 @@ The frontend MVC web application that provides:
 6. **Verify Flink is Running:**
    ```bash
    # Check Flink JobManager
-   curl http://localhost:8081/overview
+   curl http://localhost:8088/overview
    
    # Check Flink SQL Gateway
-   curl http://localhost:8083/v1/info
+   curl http://localhost:8082/v1/info
    
    # Access Flink Web UI
-   open http://localhost:8081
+   open http://localhost:8088
    ```
 
 ---
@@ -207,9 +207,9 @@ The frontend MVC web application that provides:
 - **ksqlDB Server:** http://localhost:8088
 
 **Flink:**
-- **Flink JobManager (REST API):** http://localhost:8081
-- **Flink SQL Gateway:** http://localhost:8083
-- **Flink Web UI:** http://localhost:8081
+- **Flink JobManager (REST API):** http://localhost:8088
+- **Flink SQL Gateway:** http://localhost:8082
+- **Flink Web UI:** http://localhost:8088
 
 ---
 
@@ -448,7 +448,7 @@ docker logs flink-sql-gateway
 
 # Verify connectivity
 curl http://localhost:8088/info  # ksqlDB
-curl http://localhost:8083/v1/info  # Flink
+curl http://localhost:8082/v1/info  # Flink
 ```
 
 **2. "EMIT CHANGES is not valid Flink SQL syntax"**

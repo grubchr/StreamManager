@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Apache Flink-specific services
 # Run with: docker-compose -f docker-compose.base.yml -f docker-compose.flink.yml up
 services:
@@ -8,7 +6,7 @@ services:
     hostname: flink-jobmanager
     container_name: flink-jobmanager
     ports:
-      - "8081:8081"  # Flink Web UI and REST API
+      - "8088:8081"  # Flink Web UI and REST API
     command: jobmanager
     environment:
       - |
@@ -47,7 +45,7 @@ services:
     hostname: flink-sql-gateway
     container_name: flink-sql-gateway
     ports:
-      - "8083:8083"  # SQL Gateway REST API
+      - "8082:8082"  # SQL Gateway REST API
     depends_on:
       - flink-jobmanager
       - flink-taskmanager
@@ -64,4 +62,4 @@ services:
         rest.address: flink-jobmanager
         rest.port: 8081
         sql-gateway.endpoint.rest.address: 0.0.0.0
-        sql-gateway.endpoint.rest.port: 8083
+        sql-gateway.endpoint.rest.port: 8082
