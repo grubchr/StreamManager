@@ -2,7 +2,7 @@
 
 #nullable disable
 
-namespace StreamManager.Api.Migrations
+namespace StreamManager.Api.Data.Migrations
 {
     /// <inheritdoc />
     public partial class AddKsqlStreamName : Migration

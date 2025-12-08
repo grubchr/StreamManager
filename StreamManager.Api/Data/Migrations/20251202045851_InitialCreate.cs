@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace StreamManager.Api.Migrations
+namespace StreamManager.Api.Data.Migrations
 {
     /// <inheritdoc />
     public partial class InitialCreate : Migration

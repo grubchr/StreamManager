@@ -8,7 +8,7 @@ using StreamManager.Api.Data;
 
 #nullable disable
 
-namespace StreamManager.Api.Migrations
+namespace StreamManager.Api.Data.Migrations
 {
     [DbContext(typeof(StreamManagerDbContext))]
     partial class StreamManagerDbContextModelSnapshot : ModelSnapshot
